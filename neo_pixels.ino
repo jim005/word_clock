@@ -1,6 +1,37 @@
 
+// inspiration:  https://github.com/Chnalex/arduino
+
+
+
+// horloge avec 40 LEDs adressables ( 22 mots ) permettant d'afficher l'heure
+// utilisation de 3 registres a decalage pour illuminer les 23 blocs de leds
+// un BP (bouton poussoir) pour passage heure hiver/ete
+// horloge RTC DS1307
+// remise à l'heure via le port serie (envoie d'une chaine formatée : HHMMSSJJMMAAAA)
+//
+//
+//                                                    _________| |__
+//                                                TX  |  |()|  | |  |  Vin  --------- +9v
+//                                                RX  |        | |  |  GND  --------- 0v
+//                                                RST |       ICSP  |  RST
+//                                                GND |             |  +5V  --------- alim horloge et LED
+//                                                D2  |             |  A7
+//                         LED data   ---------   D3  |   NANO      |  A6
+//                                                D4  |             |  A5   --------- Bus I2C SCL pour horloge RTC (bleu)
+//                                                D5  |             |  A4   --------- Bus I2C SDA pour horloge RTC (jaune)
+//                                                D6  |             |  A3
+//                                                D7  |             |  A2
+//                                                D8  |             |  A1
+//                                                D9  |             |  A0
+//                                                D10 |             |  AREF
+//                                                D11 |    _____    |  3.3V
+//                  BP heure ete/hiver  --------- D12 |   [ USB ]   |  D13
+//                                                    -----|___|-----
+//
+
 // Lib
 #include <Time.h>
+#include <TimeAlarms.h>
 #include <TimeLib.h>
 #include <Wire.h>
 #include <DS1307RTC.h>
@@ -12,299 +43,142 @@
 #endif
 
 
-// Which pin on the Arduino is connected to the NeoPixels?
+// NeoPixels LED data
 #define PIN 3
+
+// Button for winter / summer time
+#define BP 12 
+#include <EEPROM.h>
 
 // How many NeoPixels are attached to the Arduino?
 #define NUMPIXELS 40
 
 // Initial brightness (0-255)
-#define NEOPIXEL_BRIGHTNESS 20
+// #define NEOPIXEL_BRIGHTNESS 20
 
-// When we setup the NeoPixel library, we tell it how many pixels, and which pin to use to send signals.
-// Note that for older NeoPixel strips you might need to change the third parameter--see the strandtest
-// example for more information on possible values.
 Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
 
 // Delay value
-#define DELAYVAL 10000
+#define DELAYVAL 30000  // micro seconde
 
 // Time variables
-int h;
-int m;
-int s;
-
-// RGB color variables
-int red = 0;
-int green = 0;
-int blue = 255;
+int heure_courante = 0;
+int minute_courante = 0;
+uint32_t valeur_courante = 0;
 
 //Declare integer array with size corresponding to number of Neopixels in chain
 int individualPixels[NUMPIXELS];
 
+// Mots
+const int IL[] = {0};
+const int EST[] = {1};
+const int UNE[] = {2};
+const int DEUX[] = {3, 4};
+const int QUATRE[] = {5, 6, 7};
+const int TROIS[] = {8, 9};
+const int CINQ[] = {10, 11};
+const int SIX[] = {12};
+const int SEPT[] = {13, 14};
+const int NEUF[] = {15, 16};
+const int HUIT[] = {17, 18};
+const int DIX[] = {19};
+const int MIDI[] = {22, 23};
+const int MINUIT[] = {20, 21};
+const int DIX_MINUTES[] = {24}; // doublons sur la grille d'affichage.
+const int MOINS[] = {25, 26};
+const int HEURE[] = {27, 28};
+const int ET[] = {29};
+const int QUART[] = {30, 31};
+const int DEMI[] = {32, 33};
+const int CINQ_MINUTES[] = {34, 35};  // doublons sur la grille d'affichage.
+const int VINGT[] = {36, 37};
+const int ONZE[] = {38, 39};
+
+char buffer_serie[32];
+
+uint8_t sensorVal;
+
+
+
+void wordShowOn(int Param[], int count = 1, int red = 0, int green = 0, int blue = 255);
 
 void setup() {
 
-#if defined(__AVR_ATtiny85__) && (F_CPU == 16000000)
-  clock_prescale_set(clock_div_1);
-#endif
-
-  // setTime(23, 44, 0, 29, 3, 2020); //Initialize current time as Midnight/noon 04/01/2020
-  pixels.begin();
-
   Serial.begin(9600); //Begin Serial for debugging purposes
+  Serial.flush();
+  Serial.println("Let s start !");
 
-}
+  pinMode(BP,INPUT_PULLUP); //bp pour passage heure d'ete/heure d'hiver
 
-
-void loop()
-{
-
-  tmElements_t tm;
-
-  if (RTC.read(tm)) {
-    Serial.print("Ok, Time = ");
-    print2digits(tm.Hour);
-    Serial.write(':');
-    print2digits(tm.Minute);
-    Serial.write(':');
-    print2digits(tm.Second);
-    Serial.print(", Date (D/M/Y) = ");
-    Serial.print(tm.Day);
-    Serial.write('/');
-    Serial.print(tm.Month);
-    Serial.write('/');
-    Serial.print(tmYearToCalendar(tm.Year));
-    Serial.println();
-  } else {
-    if (RTC.chipPresent()) {
-      Serial.println("The DS1307 is stopped.  Please run the SetTime");
-      Serial.println("example to initialize the time and begin running.");
-      Serial.println();
-    } else {
-      Serial.println("DS1307 read error!  Please check the circuitry.");
-      Serial.println();
-    }
-    delay(9000);
-  }
-  delay(1000);
-
-
-
+  pixels.begin();
   pixels.clear();
 
 
-  //Declare integer array with size corresponding to number of Neopixels in chain
-  int individualPixels[NUMPIXELS] = {0};
-
-  // Time
-  if ( tm.Hour == 0 )
-    return 12; // 12 midnight
-  else if ( tm.Hour  > 12)
-    h = tm.Hour - 12 ;
-  else
-    h = tm.Hour ;
-    
-  m = tm.Minute;
-
-  /* Parse time values to light corresponding pixels */
-  individualPixels[0] = 1; //Light "IL"
-  individualPixels[1] = 1; //Light "EST"
-
-
-  /* Minutes between 35-60 - Light "MOINS" & MODIFY CURRENT HOUR VALUE */
-  if (m >= 35) {
-    // MOINS
-    individualPixels[25] = 1;
-    individualPixels[26] = 1;
-    h++; //Add 1 from current hour
-    /*Set time to twelve for hour around midnight, noon */
-    if (h == 0) {
-      h = 12;
-    }
-    /*Corner case for 12:35-12:59 */
-    if (h == 13) {
-      h = 1;
-    }
-  }
-
-
-  /* Hour=1 - Light "UNE" */
-  if (h == 1) {
-    individualPixels[2] = 1;
-  }
-
-  /* Hour=2 - Light "DEUX" */
-  if (h == 2) {
-    individualPixels[3] = 1;
-    individualPixels[4] = 1;
-  }
-
-  /* Hour=3 - Light "TROIS" */
-  if (h == 3) {
-    individualPixels[8] = 1;
-    individualPixels[9] = 1;
-  }
-
-  /* Hour=4 - Light "QUATRE" */
-  if (h == 4) {
-    individualPixels[5] = 1;
-    individualPixels[6] = 1;
-    individualPixels[7] = 1;
-  }
-
-  /* Hour=5 - Light "CINQ" */
-  if (h == 5) {
-    individualPixels[10] = 1;
-    individualPixels[11] = 1;
-  }
-
-  /* Hour=6 - Light "SIX" */
-  if (h == 6) {
-    individualPixels[12] = 1;
-  }
-
-  /* Hour=7 - Light "SEPT" */
-  if (h == 7) {
-    individualPixels[13] = 1;
-    individualPixels[14] = 1;
-  }
-
-  /* Hour=8 - Light "HUIT" */
-  if (h == 8) {
-    individualPixels[17] = 1;
-    individualPixels[18] = 1;
-  }
-
-  /* Hour=9 - Light "NEUF" */
-  if (h == 9) {
-    individualPixels[15] = 1;
-    individualPixels[16] = 1;
-  }
-
-  /* Hour=10 - Light "DIX" */
-  if (h == 10) {
-    individualPixels[19] = 1;
-  }
-
-  /* Hour=11 - Light "ONZE" */
-  if (h == 11) {
-    individualPixels[38] = 1;
-    individualPixels[39] = 1;
-  }
-
-
-
-  /* HEURE ou  MIDI ou MINUIT */
-  if (h == 12) {
-
-    /* Hour=12 - Light "MIDI" */
-    if (isAM() == true) {
-      individualPixels[20] = 1;
-      individualPixels[21] = 1;
-    }
-
-    /* Hour=12 - Light "MINUIT" */
-    if (isPM() == true) {
-      individualPixels[22] = 1;
-      individualPixels[23] = 1;
-    }
-
-  } else {
-
-    // HEURE
-    individualPixels[27] = 1;
-    individualPixels[28] = 1;
-  }
-
-
-
-
-  /* Minutes between 0-5 - Light "O CLOCK" */
-  if ((m >= 0 && m < 5)) {
-
-  }
-
-  /* Minutes between 5-10 or 55-60 - Light "CING ("MINUTES) */
-  if ((m >= 5 && m < 10) || (m >= 55 && m < 60)) {
-    individualPixels[35] = 1;
-    individualPixels[34] = 1;
-  }
-
-  /* Minutes between 10-15 or 50-55 - Light "DIX (MINUTES)" */
-  if ((m >= 10 && m < 15) || (m >= 50 && m < 55)) {
-    individualPixels[24] = 1;
-  }
-
-  /* Minutes between 15-20 or 45-50 - Light "QUART" */
-  if ((m >= 15 && m < 20) || (m >= 45 && m < 50)) {
-    individualPixels[30] = 1;
-    individualPixels[31] = 1;
-  }
-
-  /* Minutes between 20-25 or 40-45 - Light "VINGT (MINUTES) */
-  if ((m >= 20 && m < 25) || (m >= 40 && m < 45)) {
-    individualPixels[36] = 1;
-    individualPixels[37] = 1;
-  }
-
-  /* Minutes between 25-30 or 35-40 - Light "VINGT (MINUTES)", "CINQ (MINUTES)" */
-  if ((m >= 25 && m < 30) || (m >= 35 && m < 40)) {
-    // VINGT
-    individualPixels[36] = 1;
-    individualPixels[37] = 1;
-
-    // CINQ
-    individualPixels[35] = 1;
-    individualPixels[34] = 1;
-  }
-
-  /* Minutes between 30-35 - Light "DEMI" */
-  if ((m >= 30 && m < 35)) {
-    individualPixels[32] = 1;
-    individualPixels[33] = 1;
-  }
-
-  /* Minutes between 5-35 - Light "ET" */
-  if ((m >= 5) && (m < 35)) {
-    individualPixels[29] = 1;
-  }
-
-
-
-  Serial.print(h);
-  Serial.print("h");
-  Serial.print(m);
-  Serial.println(" <== heure pour éclairage de LED  ( +1 heure si minute > 35 )");
-
-
-
-  /* Light pixels corresponding to current time */
+  // Test de toutes les LEDs
   for (int i = 0; i < sizeof(individualPixels); i++) {
-    if (individualPixels[i] == 1) {
-      pixels.setPixelColor(i, pixels.Color(red, green, blue)); //Set Neopixel color
-
-      Serial.print("Pixels ON : ");
-      Serial.println(i);
-
-    }
-    else {
-      pixels.setPixelColor(i, pixels.Color(0, 0, 0));
-    }
+    pixels.clear();
+    pixels.setPixelColor(i, pixels.Color(0, 255, 0));
+    pixels.show();
+    delay(200);
   }
 
 
-  pixels.show(); //Display Neopixel color
 
-  delay(DELAYVAL);
+  // Demarrage du bus I2C
+  delay(400);
+  Wire.begin();
 
-  /* Clear pixel values for re-assignment during next iteration */
-  for (int j = 0; j < sizeof(individualPixels); j++) {
-    individualPixels[j] = 0; //Set array values to 0
-    pixels.setPixelColor(j, pixels.Color(0, 0, 0)); //Set Neopixel color to 0 brightness, i.e. off
+
+  //definition de la synchro de l'horloge interne avec le module RTC toutes les 300 secondes
+  setSyncProvider(RTC.get);
+  setSyncInterval(3600);
+  delay(200);
+
+
+  if (timeStatus() == timeSet) {
+    Serial.println("timeStatus() == timeSet");
+  } else {
+    Serial.println("BUG =>> timeStatus() != timeSet");
   }
+
+  delay(1000);
+
+  //ttes les leds en OFF
+  ledsTurnOff ();
+
+  // Declaration d'un timer toutes les secondes pour le cadencement des taches
+  Alarm.timerRepeat(5, Cadenceur);
 
 }
+
+void ledsTurnOff () {
+
+  pixels.clear();
+  for (int i = 0; i < sizeof(individualPixels); i++) {
+    pixels.setPixelColor(i, pixels.Color(0, 0, 0));
+  }
+  pixels.show();
+
+}
+
+
+void loop() {
+
+  //trigger de declenchement de verif des timers d'alarme toues les 10 millisecondes
+  Alarm.delay(100);
+
+  ecoute_serie();
+
+//  sensorVal = digitalRead(BP);
+//
+//  if (sensorVal == LOW) {
+//    heure_hiver_ete();
+//    delay(1000);
+//  }
+
+}
+
+
 
 
 void print2digits(int number) {
@@ -313,3 +187,336 @@ void print2digits(int number) {
   }
   Serial.print(number);
 }
+
+
+
+void Cadenceur() {
+
+  //uint32_t valeur = 0;
+  //int heure_valeur = 0;
+  int heure_tempo = 0;
+  //uint32_t minute_valeur = 0;
+
+
+  if (minute() != minute_courante || hour() != heure_courante) {
+
+    ledsTurnOff ();
+
+
+    Serial.println("IL EST");
+    wordShowOn(IL, 1, 255, 255, 255);
+    wordShowOn(EST, 1, 255, 255, 255);
+
+
+    // Heure
+    if (hour() == 12 and minute() < 35  ) {
+      heure_tempo = 12;
+    } else {
+      heure_tempo = hour() % 12;
+    }
+
+    if (minute() > 35 ) {
+      heure_tempo++;
+    }
+
+
+    switch (heure_tempo) {
+      case 0:
+        Serial.println("MINUIT");
+        wordShowOn(MINUIT, 2);
+        break;
+
+      case 1:
+        Serial.println("UNE HEURE");
+        wordShowOn(UNE);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 2:
+        Serial.println("DEUX HEURE");
+        wordShowOn(DEUX, 2);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 3:
+        Serial.println("TROIS HEURE");
+        wordShowOn(TROIS, 2);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 4:
+        Serial.println("QUATRE HEURE");
+        wordShowOn(QUATRE, 3);
+        wordShowOn(HEURE, 2);
+        break;
+
+
+      case 5:
+        Serial.println("CINQ HEURE");
+        wordShowOn(CINQ, 2);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 6:
+        Serial.println("SIX HEURE");
+        wordShowOn(SIX);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 7:
+        Serial.println("SEPT HEURE");
+        wordShowOn(SEPT, 2);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 8:
+        Serial.println("HUIT HEURE");
+        wordShowOn(HUIT, 2);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 9:
+        Serial.println("NEUF HEURE");
+        wordShowOn(NEUF, 2);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 10:
+        Serial.println("DIX HEURE");
+        wordShowOn(DIX);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 11:
+        Serial.println("ONZE HEURE");
+        wordShowOn(ONZE);
+        wordShowOn(HEURE, 2);
+        break;
+
+      case 12:
+        Serial.println("MIDI");
+        wordShowOn(MIDI, 2);
+        break;
+
+      default:
+        // BUG
+        Serial.println("MINUIT");
+        wordShowOn(MINUIT, 2, 255, 0, 0);
+        break;
+    }
+
+
+    ///heure_valeur = leds[heure_tempo];
+
+    //
+    //
+    //        valeur = heure_valeur + leds[heure] + minute_valeur;
+    //
+    //        if (valeur != valeur_courante) {
+    //          regOne.allOff();
+    //          regOne.pinOn(valeur);
+    //          valeur_courante = valeur;
+    //        }
+
+    // Minutes
+
+    if (minute() >= 0 && minute() < 5) {
+
+    }
+    if (minute() >= 5 && minute() < 10) {
+      Serial.println("ET CINQ_MINUTES");
+      wordShowOn(ET, 1, 0, 255, 0);
+      wordShowOn(CINQ_MINUTES, 2, 0, 255, 0);
+    }
+    if (minute() >= 10 && minute() < 15) {
+      Serial.println("ET DIX_MINUTES");
+      wordShowOn(ET, 1, 0, 255, 0);
+      wordShowOn(DIX_MINUTES, 1, 0, 255, 0);
+    }
+    if (minute() >= 15 && minute() < 20) {
+      Serial.println("ET QUART");
+      wordShowOn(ET, 1, 0, 255, 0);
+      wordShowOn(QUART, 2, 0, 255, 0);
+    }
+    if (minute() >= 20 && minute() < 25) {
+      Serial.println("ET VINGT");
+      wordShowOn(ET, 1, 0, 255, 0);
+      wordShowOn(VINGT, 2, 0, 255, 0);
+    }
+    if (minute() >= 25 && minute() < 30) {
+      Serial.println("ET VINGT CINQ_MINUTES");
+      wordShowOn(ET, 1, 0, 255, 0);
+      wordShowOn(ET, 1, 0, 255, 0);
+      wordShowOn(CINQ_MINUTES, 2, 0, 255, 0);
+    }
+    if (minute() >= 30 && minute() < 35) {
+      Serial.println("ET DEMI");
+      wordShowOn(ET, 1, 0, 255, 0);
+      wordShowOn(DEMI, 2, 0, 255, 0);
+    }
+    if (minute() >= 35 && minute() < 40) {
+      Serial.println("MOINS VINGT CINQ_MINUTES");
+      wordShowOn(MOINS, 2, 0, 255, 0);
+      wordShowOn(VINGT, 2, 0, 255, 0);
+      wordShowOn(CINQ_MINUTES, 2, 0, 255, 0);
+    }
+    if (minute() >= 40 && minute() < 45) {
+      Serial.println("MOINS VINGT");
+      wordShowOn(MOINS, 2, 0, 255, 0);
+      wordShowOn(VINGT, 2, 0, 255, 0);;
+    }
+    if (minute() >= 45 && minute() < 50) {
+      Serial.println("MOINS QUART");
+      wordShowOn(MOINS, 2, 0, 255, 0);
+      wordShowOn(QUART, 2, 0, 255, 0);
+    }
+    if (minute() >= 50 && minute() < 55) {
+      Serial.println("MOINS DIX_MINUTES");
+      wordShowOn(MOINS, 2, 0, 255, 0);
+      wordShowOn(DIX_MINUTES, 1, 0, 255, 0);
+    }
+    if (minute() >= 55 && minute() < 60) {
+      Serial.println("MOINS CINQ_MINUTES");
+      wordShowOn(MOINS, 2, 0, 255, 0);
+      wordShowOn(CINQ_MINUTES, 2, 0, 255, 0);
+    }
+
+    pixels.show();
+
+
+    minute_courante = minute();
+    heure_courante = hour();
+  }
+
+  Serial.println("******************************");
+  Serial.println("Reglage Horloge");
+  Serial.println("");
+  Serial.print(hour());
+  Serial.print(F(":"));
+  Serial.print(minute());
+  Serial.print(F(":"));
+  Serial.print(second());
+  Serial.print("  ");
+  Serial.print(day());
+  Serial.print(F("/"));
+  Serial.print(month());
+  Serial.print(F("/"));
+  Serial.println(year());
+  Serial.println("");
+  Serial.println("pour mettre a jour l'heure");
+  Serial.println("taper une chaine comme suit:");
+  Serial.println("HHMMSSJJMMAAAA");
+  Serial.print(hour());
+  Serial.print(minute());
+  Serial.print(second());
+  Serial.print(day());
+  Serial.print(month());
+  Serial.println(year());
+  Serial.println("******************************");
+  Serial.println("");
+  Serial.println("");
+  Serial.println("");
+
+}
+
+
+void wordShowOn(int Param[], int count, int red, int green, int blue) {
+
+  // Turn ON a single word
+  //for (byte i = 0; i < (sizeof(Param) / sizeof(Param[0])); i++) {
+  for (byte i = 0; i < count; i++) {
+    Serial.print("LED a allumer : ");
+    Serial.println(Param[i]);
+    pixels.setPixelColor(Param[i], pixels.Color(red, green, blue));
+  }
+
+}
+
+
+
+
+void ecoute_serie()  {
+
+  int cpt = 0;
+  int hr = 0;
+  int mi = 0;
+  int sec = 0;
+  int jr = 0;
+  int mo = 0;
+  int an = 0;
+  char inByte;
+
+  raz_buffer();
+  while (Serial.available() > 0) {
+    inByte = Serial.read();
+    buffer_serie[cpt] = inByte;
+    cpt++;
+    delay(5);
+  }
+
+  if (cpt > 0) {
+    Serial.println(buffer_serie);
+
+    //format HHMMSSJJMMAAAA
+    hr = ((buffer_serie[0] - '0') * 10) + (buffer_serie[1] - '0');
+    mi = ((buffer_serie[2] - '0') * 10) + (buffer_serie[3] - '0');
+    sec = ((buffer_serie[4] - '0') * 10) + (buffer_serie[5] - '0');
+    jr = ((buffer_serie[6] - '0') * 10) + (buffer_serie[7] - '0');
+    mo = ((buffer_serie[8] - '0') * 10) + (buffer_serie[9] - '0');
+    an = ((buffer_serie[10] - '0') * 1000) + ((buffer_serie[11] - '0') * 100) + ((buffer_serie[12] - '0') * 10) + (buffer_serie[13] - '0');
+    Serial.print(hr);
+    Serial.print(" ");
+    Serial.print(mi);
+    Serial.print(" ");
+    Serial.print(sec);
+    Serial.print(" ");
+    Serial.print(jr);
+    Serial.print(" ");
+    Serial.print(mo);
+    Serial.print(" ");
+    Serial.print(an);
+    Serial.println(" ");
+    setTime(hr, mi, sec, jr, mo, an);
+    RTC.set(now());
+    Cadenceur();
+  }
+}
+
+
+void raz_buffer()  {
+  for (int i = 0; i < 32; i++) {
+    buffer_serie[i] = '\0';
+  }
+}
+
+void heure_hiver_ete(){
+    int heures=hour();
+    int minutes=minute();
+    int secondes=second();
+    int jour_mois=day();
+    int mois=month();
+    int annee=year();
+    int heure_ete=EEPROM.read(200);
+    if(heure_ete==0){
+          if(heures==23){
+            heures=0;
+          }else{
+            heures++;
+          }
+          setTime(heures,minutes,secondes,jour_mois,mois,annee);
+          RTC.set(now());
+          EEPROM.write(200,1);   
+     }else{
+          if(heures==0){
+            heures=23;
+          }else{
+            heures--;
+          }
+          setTime(heures,minutes,secondes,jour_mois,mois,annee);
+          RTC.set(now());
+          EEPROM.write(200,0);       
+     }
+     Cadenceur(); 
+}
+
+
